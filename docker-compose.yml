@@ -1,7 +1,7 @@
 version: '3.4'
 services:
 # Initial setup. Run the following command first and enter a valie fitbit refresh token
-# make sure the mapped logs and tokens folders exists and owned by 1000 uid, otherwise you may get permission denied error. 
+# make sure the mapped logs and tokens folders exists and owned by 1000 uid, otherwise you may get permission denied error.
 # docker compose run --rm fitbit-fetch-data
 # Then exit out with ctrl + c
 # Then run docker compose up -d to launch the full stack
@@ -9,6 +9,7 @@ services:
     image: influxdb:2.7
     container_name: influxdb
     restart: unless-stopped
+    user: 3000:950
     ports:
       - "8086:8086"
     environment:
@@ -19,11 +20,11 @@ services:
       - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET}
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN}
     volumes:
-      - influxdb-data:/var/lib/influxdb2
-      - influxdb-config:/etc/influxdb2
+      - ${STORAGE_LOCATION}/influx/influxdb-data:/var/lib/influxdb2
+      - ${STORAGE_LOCATION}/influx/influxdb-config:/etc/influxdb2
     networks:
       - fitbit-network
-  
+
   fitbit-fetch:
     build:
       context: .
@@ -32,7 +33,7 @@ services:
     restart: unless-stopped
     environment:
       - FITBIT_LOG_FILE_PATH=/app/logs/fitbit.log
-      - TOKEN_FILE_PATH=/app/tokens/tokens.json
+      - TOKEN_FILE_PATH=/app/tokens/tokens
       - FITBIT_LANGUAGE=en_US
       - INFLUXDB_VERSION=2
       - INFLUXDB_HOST=influxdb
@@ -44,23 +45,19 @@ services:
       - INFLUXDB_ORG=${INFLUXDB_ORG}
       - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
       - INFLUXDB_URL=http://influxdb:8086
-      - FITBIT_CLIENT_ID=${FITBIT_CLIENT_ID}
-      - FITBIT_CLIENT_SECRET=${FITBIT_CLIENT_SECRET}
+      - FITBIT_CLIENT_ID=23Q3XP
+      - FITBIT_CLIENT_SECRET=fc87439f70aa9191e1f816ec1f5ad4dc
       - FITBIT_DEVICE_NAME=${FITBIT_DEVICE_NAME}
       - AUTO_DATE_RANGE=true
       - AUTO_UPDATE_DATE_RANGE=1
       - LOCAL_TIMEZONE=${LOCAL_TIMEZONE:-America/New_York}
     volumes:
-      - ./logs:/app/logs
-      - ./tokens:/app/tokens
+      - ${STORAGE_LOCATION}/logs:/app/logs
+      - ${STORAGE_LOCATION}/tokens:/app/tokens
     depends_on:
       - influxdb
     networks:
       - fitbit-network
-volumes:
-  influxdb-data:
-  influxdb-config:
-  chronograf-data:
 
 networks:
   fitbit-network:
