@@ -14,30 +14,30 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 # ## Variables
 
 # %%
-FITBIT_LOG_FILE_PATH = os.environ.get("FITBIT_LOG_FILE_PATH") or "your/expected/log/file/location/path"
-TOKEN_FILE_PATH = os.environ.get("TOKEN_FILE_PATH") or "your/expected/token/file/location/path"
+FITBIT_LOG_FILE_PATH = os.environ.get("FITBIT_LOG_FILE_PATH", "/app/logs/fitbit.log")
+TOKEN_FILE_PATH = os.environ.get("TOKEN_FILE_PATH", "/app/tokens/tokens.json")
 OVERWRITE_LOG_FILE = True
-FITBIT_LANGUAGE = 'en_US'
-INFLUXDB_VERSION = os.environ.get("INFLUXDB_VERSION") or "1" # Version of influxdb in use, supported values are 1 or 2
+FITBIT_LANGUAGE = os.environ.get("FITBIT_LANGUAGE", 'en_US')
+INFLUXDB_VERSION = os.environ.get("INFLUXDB_VERSION", "2")
 # Update these variables for influxdb 1.x versions
-INFLUXDB_HOST = os.environ.get("INFLUXDB_HOST") or 'localhost' # for influxdb 1.x
-INFLUXDB_PORT = os.environ.get("INFLUXDB_PORT") or 8086 # for influxdb 1.x 
-INFLUXDB_USERNAME = os.environ.get("INFLUXDB_USERNAME") or 'your_influxdb_username' # for influxdb 1.x
-INFLUXDB_PASSWORD = os.environ.get("INFLUXDB_PASSWORD") or 'your_influxdb_password' # for influxdb 1.x
-INFLUXDB_DATABASE = os.environ.get("INFLUXDB_DATABASE") or 'your_influxdb_database_name' # for influxdb 1.x
+INFLUXDB_HOST = os.environ.get("INFLUXDB_HOST", 'influxdb')
+INFLUXDB_PORT = int(os.environ.get("INFLUXDB_PORT", "8086"))
+INFLUXDB_USERNAME = os.environ.get("INFLUXDB_USERNAME", 'tim')
+INFLUXDB_PASSWORD = os.environ.get("INFLUXDB_PASSWORD", "")
+INFLUXDB_DATABASE = os.environ.get("INFLUXDB_DATABASE", 'fitbit')
 # Update these variables for influxdb 2.x versions
-INFLUXDB_BUCKET = os.environ.get("INFLUXDB_BUCKET") or "your_bucket_name_here" # for influxdb 2.x
-INFLUXDB_ORG = os.environ.get("INFLUXDB_ORG") or "your_org_here" # for influxdb 2.x
-INFLUXDB_TOKEN = os.environ.get("INFLUXDB_TOKEN") or "your_token_here" # for influxdb 2.x
-INFLUXDB_URL = os.environ.get("INFLUXDB_URL") or "http://your_url_here:8086" # for influxdb 2.x
+INFLUXDB_BUCKET = os.environ.get("INFLUXDB_BUCKET", "health_data")
+INFLUXDB_ORG = os.environ.get("INFLUXDB_ORG", "home")
+INFLUXDB_TOKEN = os.environ.get("INFLUXDB_TOKEN", "")
+INFLUXDB_URL = os.environ.get("INFLUXDB_URL", "http://influxdb:8086")
 # MAKE SURE you set the application type to PERSONAL. Otherwise, you won't have access to intraday data series, resulting in 40X errors.
-client_id = os.environ.get("CLIENT_ID") or "your_application_client_ID" # Change this to your client ID
-client_secret = os.environ.get("CLIENT_SECRET") or "your_application_client_secret" # Change this to your client Secret
-DEVICENAME = os.environ.get("DEVICENAME") or "Your_Device_Name" # e.g. "Charge5"
+client_id = os.environ.get("FITBIT_CLIENT_ID", "")
+client_secret = os.environ.get("FITBIT_CLIENT_SECRET", "")
+DEVICENAME = os.environ.get("FITBIT_DEVICE_NAME", "Pixel Watch 3")
 ACCESS_TOKEN = "" # Empty Global variable initialization, will be replaced with a functional access code later using the refresh code
-AUTO_DATE_RANGE = True # Automatically selects date range from todays date and update_date_range variable
-auto_update_date_range = 1 # Days to go back from today for AUTO_DATE_RANGE *** DO NOT go above 2 - otherwise may break rate limit ***
-LOCAL_TIMEZONE = os.environ.get("LOCAL_TIMEZONE") or "Automatic" # set to "Automatic" for Automatic setup from User profile (if not mentioned here specifically).
+AUTO_DATE_RANGE = os.environ.get("AUTO_DATE_RANGE", "true").lower() == "true"
+auto_update_date_range = int(os.environ.get("AUTO_UPDATE_DATE_RANGE", "1"))
+LOCAL_TIMEZONE = os.environ.get("LOCAL_TIMEZONE", "America/New_York")
 SCHEDULE_AUTO_UPDATE = True if AUTO_DATE_RANGE else False # Scheduling updates of data when script runs
 SERVER_ERROR_MAX_RETRY = 3
 EXPIRED_TOKEN_MAX_RETRY = 5
@@ -534,42 +534,509 @@ def get_daily_data_limit_none(start_date_str, end_date_str):
     else:
         logging.error("Recording failed : Avg SPO2 for date " + start_date_str + " to " + end_date_str)
 
-# Fetches latest activities from record ( upto last 100 )
-def fetch_latest_activities(end_date_str):
-    recent_activities_data = request_data_from_fitbit('https://api.fitbit.com/1/user/-/activities/list.json', params={'beforeDate': end_date_str, 'sort':'desc', 'limit':50, 'offset':0})
-    if recent_activities_data != None:
-        for activity in recent_activities_data['activities']:
-            fields = {}
-            if 'activeDuration' in activity:
-                fields['ActiveDuration'] = int(activity['activeDuration'])
-            if 'averageHeartRate' in activity:
-                fields['AverageHeartRate'] = int(activity['averageHeartRate'])
-            if 'calories' in activity:
-                fields['calories'] = int(activity['calories'])
-            if 'duration' in activity:
-                fields['duration'] = int(activity['duration'])
-            if 'distance' in activity:
-                fields['distance'] = float(activity['distance'])
-            if 'steps' in activity:
-                fields['steps'] = int(activity['steps'])
-            starttime = datetime.fromisoformat(activity['startTime'].strip("Z"))
-            utc_time = starttime.astimezone(pytz.utc).isoformat()
-            try:
-                extracted_activity_name = activity['activityName']
-            except KeyError as MissingKeyError:
-                extracted_activity_name = "Unknown-Activity"
+def get_cardio_score(start_date_str, end_date_str):
+    """Fetches Cardio Fitness Score (VO2 Max)"""
+    data = request_data_from_fitbit(f'https://api.fitbit.com/1/user/-/cardioscore/date/{start_date_str}/{end_date_str}.json')
+    if data and 'cardioScore' in data:
+        for score in data['cardioScore']:
+            log_time = datetime.fromisoformat(score['dateTime'] + "T00:00:00")
+            utc_time = LOCAL_TIMEZONE.localize(log_time).astimezone(pytz.utc).isoformat()
+            
+            # Handle VO2 Max range values
+            vo2_max = score['value']['vo2Max']
+            if isinstance(vo2_max, str) and '-' in vo2_max:
+                # If it's a range like "34-38", take the average
+                low, high = map(float, vo2_max.split('-'))
+                vo2_max_value = (low + high) / 2
+            else:
+                # If it's a single value
+                vo2_max_value = float(vo2_max)
+
             collected_records.append({
-                "measurement": "Activity Records",
+                "measurement": "CardioScore",
                 "time": utc_time,
                 "tags": {
-                    "ActivityName": extracted_activity_name
+                    "Device": DEVICENAME
+                },
+                "fields": {
+                    "value": vo2_max_value,
+                    "range_low": low if isinstance(vo2_max, str) and '-' in vo2_max else vo2_max_value,
+                    "range_high": high if isinstance(vo2_max, str) and '-' in vo2_max else vo2_max_value
+                }
+            })
+        logging.info(f"Recorded Cardio Score for date {start_date_str} to {end_date_str}")
+    else:
+        logging.error(f"Recording failed: Cardio Score for date {start_date_str} to {end_date_str}")
+
+def get_stress_score(start_date_str, end_date_str):
+    """Fetches Daily Stress Score"""
+    data = request_data_from_fitbit(f'https://api.fitbit.com/1/user/-/stress/score/date/{start_date_str}/{end_date_str}.json')
+    if data and 'dailyStress' in data:
+        for score in data['dailyStress']:
+            log_time = datetime.fromisoformat(score['dateTime'] + "T00:00:00")
+            utc_time = LOCAL_TIMEZONE.localize(log_time).astimezone(pytz.utc).isoformat()
+            collected_records.append({
+                "measurement": "StressScore",
+                "time": utc_time,
+                "tags": {
+                    "Device": DEVICENAME
+                },
+                "fields": {
+                    "value": score.get('value', None)
+                }
+            })
+        logging.info(f"Recorded Stress Score for date {start_date_str} to {end_date_str}")
+    else:
+        logging.error(f"Recording failed: Stress Score for date {start_date_str} to {end_date_str}")
+
+def get_temperature_data(start_date_str, end_date_str):
+    """Fetches both core and skin temperature data"""
+    # Core temperature
+    core_data = request_data_from_fitbit(f'https://api.fitbit.com/1/user/-/temp/core/date/{start_date_str}/{end_date_str}.json')
+    if core_data and 'tempCore' in core_data:
+        for temp in core_data['tempCore']:
+            log_time = datetime.fromisoformat(temp['dateTime'] + "T00:00:00")
+            utc_time = LOCAL_TIMEZONE.localize(log_time).astimezone(pytz.utc).isoformat()
+            collected_records.append({
+                "measurement": "CoreTemperature",
+                "time": utc_time,
+                "tags": {
+                    "Device": DEVICENAME
+                },
+                "fields": {
+                    "value": float(temp['value']['value'])
+                }
+            })
+        logging.info(f"Recorded Core Temperature for date {start_date_str} to {end_date_str}")
+    else:
+        logging.error(f"Recording failed: Core Temperature for date {start_date_str} to {end_date_str}")
+
+def get_ecg_data(start_date_str, end_date_str):
+    """Fetches ECG readings"""
+    offset = 0
+    limit = 10
+    while True:
+        params = {
+            'beforeDate': end_date_str,
+            'sort': 'desc',
+            'limit': limit,
+            'offset': offset
+        }
+        
+        data = request_data_from_fitbit('https://api.fitbit.com/1/user/-/ecg/list.json', params=params)
+        
+        if not data or 'ecgReadings' not in data or not data['ecgReadings']:
+            break
+            
+        for reading in data['ecgReadings']:
+            try:
+                # Check if we have the required fields
+                if 'startTime' not in reading:
+                    logging.warning(f"ECG reading missing startTime: {reading}")
+                    continue
+
+                log_time = datetime.fromisoformat(reading['startTime'].replace('Z', ''))
+                utc_time = LOCAL_TIMEZONE.localize(log_time).astimezone(pytz.utc).isoformat()
+                
+                # Only process readings within our date range
+                reading_date = reading['startTime'].split('T')[0]
+                if reading_date < start_date_str:
+                    break
+
+                fields = {}
+                if 'averageHeartRate' in reading:
+                    fields['averageHeartRate'] = reading['averageHeartRate']
+                if 'leadNumber' in reading:
+                    fields['leadNumber'] = reading['leadNumber']
+                if 'samplingFrequencyHz' in reading:
+                    fields['samplingFrequencyHz'] = reading['samplingFrequencyHz']
+                if 'waveformSamples' in reading:
+                    fields['numberOfSamples'] = len(reading['waveformSamples'])
+
+                collected_records.append({
+                    "measurement": "ECG",
+                    "time": utc_time,
+                    "tags": {
+                        "Device": DEVICENAME,
+                        "classification": reading.get('resultClassification', 'unknown')
+                    },
+                    "fields": fields
+                })
+            except Exception as e:
+                logging.error(f"Error processing ECG reading: {e}")
+                continue
+            
+        # If we got fewer results than the limit, we've reached the end
+        if len(data['ecgReadings']) < limit:
+            break
+            
+        offset += limit
+        time.sleep(1)  # Rate limiting precaution
+        
+    if collected_records:
+        logging.info(f"Recorded ECG data before date {end_date_str}")
+    else:
+        logging.warning(f"No ECG data found for date range {start_date_str} to {end_date_str}")
+
+def get_water_logs(start_date_str, end_date_str):
+    """Fetches water consumption logs"""
+    data = request_data_from_fitbit(f'https://api.fitbit.com/1/user/-/foods/log/water/date/{start_date_str}/{end_date_str}.json')
+    if data and 'foods-log-water' in data:
+        for day in data['foods-log-water']:
+            try:
+                log_time = datetime.fromisoformat(day['dateTime'] + "T00:00:00")
+                utc_time = LOCAL_TIMEZONE.localize(log_time).astimezone(pytz.utc).isoformat()
+                collected_records.append({
+                    "measurement": "WaterLog",
+                    "time": utc_time,
+                    "tags": {
+                        "Device": DEVICENAME
+                    },
+                    "fields": {
+                        "amount": float(day['value'])  # Amount in mL
+                    }
+                })
+            except (KeyError, ValueError) as e:
+                logging.error(f"Error processing water log entry: {e}")
+                continue
+                
+        logging.info(f"Recorded Water Logs for date {start_date_str} to {end_date_str}")
+    else:
+        logging.warning(f"No water logs found for date {start_date_str} to {end_date_str}")
+
+def get_food_logs(date_str):
+    """Fetches food logs and nutrition data for a single day"""
+    data = request_data_from_fitbit(f'https://api.fitbit.com/1/user/-/foods/log/date/{date_str}.json')
+    if data and 'foods' in data:
+        log_time = datetime.fromisoformat(date_str + "T00:00:00")
+        utc_time = LOCAL_TIMEZONE.localize(log_time).astimezone(pytz.utc).isoformat()
+        
+        # Daily totals
+        if 'summary' in data:
+            collected_records.append({
+                "measurement": "NutritionSummary",
+                "time": utc_time,
+                "tags": {
+                    "Device": DEVICENAME
+                },
+                "fields": {
+                    "calories": float(data['summary'].get('calories', 0)),
+                    "carbs": float(data['summary'].get('carbs', 0)),
+                    "fat": float(data['summary'].get('fat', 0)),
+                    "fiber": float(data['summary'].get('fiber', 0)),
+                    "protein": float(data['summary'].get('protein', 0)),
+                    "sodium": float(data['summary'].get('sodium', 0))
+                }
+            })
+        
+        # Individual food logs
+        for food in data['foods']:
+            meal_time = datetime.fromisoformat(food['logDate'] + "T" + food.get('logTime', "00:00:00"))
+            utc_meal_time = LOCAL_TIMEZONE.localize(meal_time).astimezone(pytz.utc).isoformat()
+            collected_records.append({
+                "measurement": "FoodLog",
+                "time": utc_meal_time,
+                "tags": {
+                    "Device": DEVICENAME,
+                    "mealType": food['loggedFood']['mealTypeId'],
+                    "foodName": food['loggedFood']['name']
+                },
+                "fields": {
+                    "calories": float(food['loggedFood']['calories']),
+                    "amount": float(food['loggedFood']['amount']),
+                    "unitId": int(food['loggedFood']['unit']['id'])
+                }
+            })
+        logging.info(f"Recorded Food Logs for date {date_str}")
+    else:
+        logging.error(f"Recording failed: Food Logs for date {date_str}")
+
+def get_body_measurements(start_date_str, end_date_str):
+    """Fetches body measurements including weight, BMI, body fat, etc."""
+    # Weight and BMI
+    weight_data = request_data_from_fitbit(f'https://api.fitbit.com/1/user/-/body/log/weight/date/{start_date_str}/{end_date_str}.json')
+    if weight_data and 'weight' in weight_data:
+        for measurement in weight_data['weight']:
+            log_time = datetime.fromisoformat(measurement['date'] + "T" + measurement['time'])
+            utc_time = LOCAL_TIMEZONE.localize(log_time).astimezone(pytz.utc).isoformat()
+            collected_records.append({
+                "measurement": "BodyMeasurements",
+                "time": utc_time,
+                "tags": {
+                    "Device": DEVICENAME,
+                    "source": measurement['source']
+                },
+                "fields": {
+                    "weight": float(measurement['weight']),
+                    "bmi": float(measurement.get('bmi', 0))
+                }
+            })
+    
+    # Body Fat
+    fat_data = request_data_from_fitbit(f'https://api.fitbit.com/1/user/-/body/log/fat/date/{start_date_str}/{end_date_str}.json')
+    if fat_data and 'fat' in fat_data:
+        for measurement in fat_data['fat']:
+            log_time = datetime.fromisoformat(measurement['date'] + "T" + measurement.get('time', '00:00:00'))
+            utc_time = LOCAL_TIMEZONE.localize(log_time).astimezone(pytz.utc).isoformat()
+            collected_records.append({
+                "measurement": "BodyFat",
+                "time": utc_time,
+                "tags": {
+                    "Device": DEVICENAME,
+                    "source": measurement['source']
+                },
+                "fields": {
+                    "fat": float(measurement['fat'])
+                }
+            })
+    
+    logging.info(f"Recorded Body Measurements for date {start_date_str} to {end_date_str}")
+
+def get_exercise_goals():
+    """Fetches current exercise and activity goals"""
+    try:
+        # Get daily goals
+        data = request_data_from_fitbit('https://api.fitbit.com/1/user/-/activities/goals/daily.json')
+        logging.info(f"Received daily goals data: {data}")
+        
+        if data and 'goals' in data:  # Check for 'goals' key
+            current_time = datetime.now(LOCAL_TIMEZONE)
+            utc_time = current_time.astimezone(pytz.utc).isoformat()
+            collected_records.append({
+                "measurement": "ActivityGoals",
+                "time": utc_time,
+                "tags": {
+                    "Device": DEVICENAME,
+                    "type": "daily"
+                },
+                "fields": {
+                    "caloriesOut": int(data['goals'].get('caloriesOut', 0)),
+                    "distance": float(data['goals'].get('distance', 0)),
+                    "floors": int(data['goals'].get('floors', 0)),
+                    "steps": int(data['goals'].get('steps', 0)),
+                    "activeMinutes": int(data['goals'].get('activeMinutes', 0)),
+                    "activeZoneMinutes": int(data['goals'].get('activeZoneMinutes', 0))  # Added this new field
+                }
+            })
+            
+        # Get weekly goals
+        weekly_data = request_data_from_fitbit('https://api.fitbit.com/1/user/-/activities/goals/weekly.json')
+        logging.info(f"Received weekly goals data: {weekly_data}")
+        
+        if weekly_data and 'goals' in weekly_data:  # Check for 'goals' key
+            current_time = datetime.now(LOCAL_TIMEZONE)
+            utc_time = current_time.astimezone(pytz.utc).isoformat()
+            collected_records.append({
+                "measurement": "ActivityGoals",
+                "time": utc_time,
+                "tags": {
+                    "Device": DEVICENAME,
+                    "type": "weekly"
+                },
+                "fields": {
+                    "distance": float(weekly_data['goals'].get('distance', 0)),
+                    "floors": int(weekly_data['goals'].get('floors', 0)),
+                    "steps": int(weekly_data['goals'].get('steps', 0)),
+                    "activeMinutes": int(weekly_data['goals'].get('activeMinutes', 0))
+                }
+            })
+            
+        logging.info("Recorded Activity Goals")
+    except Exception as e:
+        logging.error(f"Error fetching activity goals: {e}")
+
+def get_activity_summary(date_str):
+    """Fetches activity summary for a specific date"""
+    try:
+        data = request_data_from_fitbit(f'https://api.fitbit.com/1/user/-/activities/date/{date_str}.json')
+        if data and 'summary' in data:
+            log_time = datetime.fromisoformat(date_str + "T00:00:00")
+            utc_time = LOCAL_TIMEZONE.localize(log_time).astimezone(pytz.utc).isoformat()
+            
+            summary = data['summary']
+            collected_records.append({
+                "measurement": "ActivitySummary",
+                "time": utc_time,
+                "tags": {
+                    "Device": DEVICENAME
+                },
+                "fields": {
+                    "caloriesOut": summary.get('caloriesOut', 0),
+                    "activityCalories": summary.get('activityCalories', 0),
+                    "steps": summary.get('steps', 0),
+                    "floors": summary.get('floors', 0),
+                    "sedentaryMinutes": summary.get('sedentaryMinutes', 0),
+                    "lightlyActiveMinutes": summary.get('lightlyActiveMinutes', 0),
+                    "fairlyActiveMinutes": summary.get('fairlyActiveMinutes', 0),
+                    "veryActiveMinutes": summary.get('veryActiveMinutes', 0)
+                }
+            })
+            logging.info(f"Recorded Activity Summary for date {date_str}")
+    except Exception as e:
+        logging.error(f"Error fetching activity summary for {date_str}: {e}")
+
+def fetch_latest_activities(end_date_str):
+    """Fetches the last 50 activities including today's activities
+    
+    Args:
+        end_date_str: Current date in YYYY-MM-DD format
+    """
+    tomorrow = (datetime.strptime(end_date_str, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    params = {
+        'beforeDate': tomorrow,
+        'sort': 'desc',
+        'limit': 50,
+        'offset': 0
+    }
+    
+    logging.info(f"Fetching last 50 activities up through {end_date_str}")
+    recent_activities_data = request_data_from_fitbit('https://api.fitbit.com/1/user/-/activities/list.json', params=params)
+    
+    if recent_activities_data and 'activities' in recent_activities_data:
+        activity_count = len(recent_activities_data['activities'])
+        logging.info(f"Retrieved {activity_count} activities")
+        
+        for activity in recent_activities_data['activities']:
+            starttime = datetime.fromisoformat(activity['startTime'].strip("Z"))
+            utc_time = starttime.astimezone(pytz.utc).isoformat()
+            
+            # Create a single record per activity with all relevant metrics
+            fields = {
+                # Duration metrics
+                'duration_minutes': round(float(activity.get('duration', 0)) / (1000 * 60), 2),  # Convert ms to minutes
+                'active_duration_minutes': round(float(activity.get('activeDuration', 0)) / (1000 * 60), 2),
+                
+                # Performance metrics
+                'average_heart_rate': activity.get('averageHeartRate', 0),
+                'calories': activity.get('calories', 0),
+                'steps': activity.get('steps', 0),
+                'distance_km': round(float(activity.get('distance', 0)), 3),
+            }
+            
+            # Add speed if available (converted to km/h)
+            if 'speed' in activity:
+                fields['speed_kmh'] = round(float(activity['speed']) * 3.6, 2)  # Convert m/s to km/h
+            
+            # Add pace if available (in min/km)
+            if 'pace' in activity:
+                fields['pace_min_km'] = round(float(activity['pace']) / 60, 2)
+            
+            # Add elevation data if available
+            if 'elevationGain' in activity:
+                fields['elevation_gain_meters'] = float(activity['elevationGain'])
+            
+            # Heart rate zones as percentage of total active time
+            if 'heartRateZones' in activity:
+                total_zone_minutes = sum(zone.get('minutes', 0) for zone in activity['heartRateZones'])
+                if total_zone_minutes > 0:
+                    for zone in activity['heartRateZones']:
+                        zone_name = zone.get('name', '').lower().replace(' ', '_')
+                        fields[f'hr_zone_{zone_name}_pct'] = round((zone.get('minutes', 0) / total_zone_minutes) * 100, 1)
+            
+            collected_records.append({
+                "measurement": "Activities",
+                "time": utc_time,
+                "tags": {
+                    "activity_name": activity.get('activityName', 'Unknown-Activity'),
+                    "device": DEVICENAME,
+                    "log_type": activity.get('logType', 'automatic'),  # Track if manually logged
+                    "activity_date": starttime.strftime("%Y-%m-%d")    # Add date as tag for easier daily queries
                 },
                 "fields": fields
             })
-        logging.info("Fetched 50 recent activities before date " + end_date_str)
+            
+        if activity_count > 0:
+            first_activity_date = recent_activities_data['activities'][-1]['startTime'].split('T')[0]
+            last_activity_date = recent_activities_data['activities'][0]['startTime'].split('T')[0]
+            logging.info(f"Activities range from {first_activity_date} to {last_activity_date}")
     else:
-        logging.error("Fetching 50 recent activities failed : before date " + end_date_str)
+        logging.warning(f"No activities found through {end_date_str}")
 
+# Add these new functions after your existing functions but before the scheduling section
+
+def get_sleep_score(start_date_str, end_date_str):
+    """Fetches sleep score data including detailed score breakdown"""
+    data = request_data_from_fitbit(f'https://api.fitbit.com/1.2/user/-/sleep/score/date/{start_date_str}/{end_date_str}.json')
+    if data and 'sleepScores' in data:
+        for day_score in data['sleepScores']:
+            log_time = datetime.fromisoformat(day_score['dateTime'] + "T00:00:00")
+            utc_time = LOCAL_TIMEZONE.localize(log_time).astimezone(pytz.utc).isoformat()
+            
+            # Overall sleep score
+            fields = {
+                'overall_score': day_score.get('overallScore', 0)
+            }
+            
+            # Add detailed breakdown if available
+            if 'scoreComponents' in day_score:
+                components = day_score['scoreComponents']
+                fields.update({
+                    'composition_score': components.get('composition', 0),
+                    'revitalization_score': components.get('revitalization', 0),
+                    'duration_score': components.get('duration', 0),
+                    'deep_sleep_score': components.get('deepSleep', 0),
+                    'quality_score': components.get('qualityOfSleep', 0)
+                })
+            
+            collected_records.append({
+                "measurement": "SleepScore",
+                "time": utc_time,
+                "tags": {
+                    "Device": DEVICENAME
+                },
+                "fields": fields
+            })
+        logging.info(f"Recorded Sleep Scores for date range {start_date_str} to {end_date_str}")
+    else:
+        logging.warning(f"No sleep score data found for date range {start_date_str} to {end_date_str}")
+
+def get_lifetime_stats():
+    """Fetches lifetime activity statistics"""
+    data = request_data_from_fitbit('https://api.fitbit.com/1/user/-/activities.json')
+    if data and 'lifetime' in data:
+        current_time = datetime.now(LOCAL_TIMEZONE)
+        utc_time = current_time.astimezone(pytz.utc).isoformat()
+        
+        lifetime = data['lifetime']
+        
+        # Process tracker data
+        if 'tracker' in lifetime:
+            tracker = lifetime['tracker']
+            collected_records.append({
+                "measurement": "LifetimeStats",
+                "time": utc_time,
+                "tags": {
+                    "Device": DEVICENAME,
+                    "source": "tracker"
+                },
+                "fields": {
+                    "distance": float(tracker.get('distance', 0)),
+                    "floors": int(tracker.get('floors', 0)),
+                    "steps": int(tracker.get('steps', 0))
+                }
+            })
+        
+        # Process total data (includes manual entries)
+        if 'total' in lifetime:
+            total = lifetime['total']
+            collected_records.append({
+                "measurement": "LifetimeStats",
+                "time": utc_time,
+                "tags": {
+                    "Device": DEVICENAME,
+                    "source": "total"  # includes both tracker and manual entries
+                },
+                "fields": {
+                    "distance": float(total.get('distance', 0)),
+                    "floors": int(total.get('floors', 0)),
+                    "steps": int(total.get('steps', 0))
+                }
+            })
+        
+        logging.info("Recorded Lifetime Stats")
+    else:
+        logging.warning("No lifetime stats data found")
 
 # %% [markdown]
 # ## Call the functions one time as a startup update OR do switch to bulk update mode
@@ -577,21 +1044,32 @@ def fetch_latest_activities(end_date_str):
 # %%
 if AUTO_DATE_RANGE:
     date_list = [(start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range((end_date - start_date).days + 1)]
+    
     if len(date_list) > 3:
-        logging.warn("Auto schedule update is not meant for more than 3 days at a time, please consider lowering the auto_update_date_range variable to aviod rate limit hit!")
+        logging.warn("Auto schedule update is not meant for more than 3 days at a time...")
     for date_str in date_list:
         get_intraday_data_limit_1d(date_str, [('heart','HeartRate_Intraday','1sec'),('steps','Steps_Intraday','1min')]) # 2 queries x number of dates ( default 2)
     get_daily_data_limit_30d(start_date_str, end_date_str) # 3 queries
     get_daily_data_limit_100d(start_date_str, end_date_str) # 1 query
     get_daily_data_limit_365d(start_date_str, end_date_str) # 8 queries
     get_daily_data_limit_none(start_date_str, end_date_str) # 1 query
+    get_cardio_score(start_date_str, end_date_str) # 1 query
+    get_temperature_data(start_date_str, end_date_str) # 1 query
+    get_ecg_data(start_date_str, end_date_str) # 1 query
+    get_water_logs(start_date_str, end_date_str) # 1 query
+    get_food_logs(start_date_str) # 1 query
+    get_body_measurements(start_date_str, end_date_str) # 1 query
+    get_exercise_goals() # 1 query
+    # Get activity summaries for each day
+    for date in date_list:
+        get_activity_summary(date)
     get_battery_level() # 1 query
     fetch_latest_activities(end_date_str) # 1 query
-    write_points_to_influxdb(collected_records)
+    get_lifetime_stats()
+    write_points_to_influxdb(collected_records) 
     collected_records = []
 else:
     # Do Bulk update----------------------------------------------------------------------------------------------------------------------------
-
     schedule.every(1).hours.do(lambda : Get_New_Access_Token(client_id,client_secret)) # Auto-refresh tokens every 1 hour
     
     date_list = [(start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range((end_date - start_date).days + 1)]
@@ -645,7 +1123,15 @@ if SCHEDULE_AUTO_UPDATE:
     schedule.every(6).hours.do( lambda : get_daily_data_limit_365d(start_date_str, end_date_str))
     schedule.every(6).hours.do(lambda : get_daily_data_limit_none(start_date_str, end_date_str))
     schedule.every(1).hours.do( lambda : fetch_latest_activities(end_date_str))
-
+    schedule.every(6).hours.do(lambda : get_cardio_score(start_date_str, end_date_str))
+    schedule.every(6).hours.do(lambda : get_temperature_data(start_date_str, end_date_str))
+    schedule.every(1).hours.do(lambda : get_ecg_data(start_date_str, end_date_str))
+    schedule.every(1).hours.do(lambda : get_water_logs(start_date_str, end_date_str))
+    schedule.every(1).hours.do(lambda : get_food_logs(start_date_str))
+    schedule.every(1).hours.do(lambda : get_body_measurements(start_date_str, end_date_str))
+    schedule.every(1).hours.do(lambda : get_exercise_goals())
+    schedule.every(1).days.do(lambda: get_activity_summary(end_date_str))
+    schedule.every(12).hours.do(get_lifetime_stats)  # Lifetime stats don't change frequently
     while True:
         schedule.run_pending()
         if len(collected_records) != 0:
@@ -653,6 +1139,3 @@ if SCHEDULE_AUTO_UPDATE:
             collected_records = []
         time.sleep(30)
         update_working_dates()
-        
-
-
