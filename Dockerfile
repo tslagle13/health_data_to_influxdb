@@ -1,22 +1,25 @@
-# For more information, please refer to https://aka.ms/vscode-docker-python
-FROM python:3.10-slim
-
-# Keeps Python from generating .pyc files in the container
-ENV PYTHONDONTWRITEBYTECODE=1
-
-# Turns off buffering for easier container logging
-ENV PYTHONUNBUFFERED=1
-
-# Install pip requirements
-COPY requirements.txt .
-RUN python -m pip install -r requirements.txt
+FROM python:3.11-slim
 
 WORKDIR /app
-COPY ./Fitbit_Fetch.py /app
-COPY ./requirements.txt /app
 
-RUN groupadd --gid 1000 appuser && useradd --uid 1000 --gid appuser --shell /bin/bash --create-home appuser && chown -R appuser:appuser /app
-USER appuser
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
 
-# During debugging, this entry point will be overridden. For more information, please refer to https://aka.ms/vscode-docker-python-debug
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the script
+COPY Fitbit_Fetch.py .
+
+# Create directories for logs and tokens
+RUN mkdir -p /app/logs /app/tokens
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+
+# Run the script
 CMD ["python", "Fitbit_Fetch.py"]
