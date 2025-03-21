@@ -482,6 +482,15 @@ def get_daily_data_limit_365d(start_date_str, end_date_str):
         for data in HR_zones_data_list:
             log_time = datetime.fromisoformat(data["dateTime"] + "T" + "00:00:00")
             utc_time = LOCAL_TIMEZONE.localize(log_time).astimezone(pytz.utc).isoformat()
+
+            normal_mins = data["value"]["heartRateZones"][0].get("minutes", 0)
+            fat_burn_mins = data["value"]["heartRateZones"][1].get("minutes", 0)
+            cardio_mins = data["value"]["heartRateZones"][2].get("minutes", 0)
+            peak_mins = data["value"]["heartRateZones"][3].get("minutes", 0)
+            
+            # Log HR zone minutes
+            logging.info(f"HR Zone Minutes for {data['dateTime']}: Normal={normal_mins}, Fat Burn={fat_burn_mins}, Cardio={cardio_mins}, Peak={peak_mins}")
+            
             collected_records.append({
                     "measurement": "HR zones",
                     "time": utc_time,
